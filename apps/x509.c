@@ -52,7 +52,7 @@ typedef enum OPTION_choice {
     OPT_CHECKEMAIL, OPT_CHECKIP, OPT_NOOUT, OPT_TRUSTOUT, OPT_CLRTRUST,
     OPT_CLRREJECT, OPT_ALIAS, OPT_CACREATESERIAL, OPT_CLREXT, OPT_OCSPID,
     OPT_SUBJECT_HASH_OLD, OPT_ISSUER_HASH_OLD, OPT_COPY_EXTENSIONS,
-    OPT_BADSIG, OPT_MD, OPT_ENGINE, OPT_NOCERT, OPT_PRESERVE_DATES,
+    OPT_BADSIG, OPT_MD, OPT_ENGINE, OPT_NOCERT, OPT_PRESERVE_DATES, OPT_PRINT_SKI,
     OPT_R_ENUM, OPT_PROV_ENUM, OPT_EXT
 } OPTION_CHOICE;
 
@@ -120,6 +120,7 @@ const OPTIONS x509_options[] = {
     {"purpose", OPT_PURPOSE, '-', "Print out certificate purposes"},
     {"pubkey", OPT_PUBKEY, '-', "Print the public key in PEM format"},
     {"modulus", OPT_MODULUS, '-', "Print the RSA key modulus"},
+    {"print_ski", OPT_PRINT_SKI, '-', "Print the Subject Key Info hash"},
 
     OPT_SECTION("Certificate checking"),
     {"checkend", OPT_CHECKEND, 'M',
@@ -289,6 +290,7 @@ int x509_main(int argc, char **argv)
     int ret = 1, i, j, num = 0, badsig = 0, clrext = 0, nocert = 0;
     int text = 0, serial = 0, subject = 0, issuer = 0, startdate = 0, ext = 0;
     int enddate = 0;
+    int print_ski = 0;
     time_t checkoffset = 0;
     unsigned long certflag = 0;
     int preserve_dates = 0;
@@ -588,6 +590,9 @@ int x509_main(int argc, char **argv)
             break;
         case OPT_PRESERVE_DATES:
             preserve_dates = 1;
+            break;
+        case OPT_PRINT_SKI:
+            print_ski = ++num;
             break;
         case OPT_MD:
             digest = opt_unknown();
@@ -1031,6 +1036,40 @@ int x509_main(int argc, char **argv)
             X509_ocspid_print(out, x);
         } else if (i == ext) {
             print_x509v3_exts(out, x, ext_names);
+        } else if (i == print_ski) {
+            unsigned int n;
+            ASN1_BIT_STRING *key;
+            unsigned char md[EVP_MAX_MD_SIZE];
+            const char *fdigname = digest;
+            EVP_MD *fdig;
+            int digres;
+
+            if (fdigname == NULL)
+                fdigname = "SHA1";
+
+            if ((fdig = EVP_MD_fetch(app_get0_libctx(), fdigname,
+                                     app_get0_propq())) == NULL) {
+                BIO_puts(bio_err, "Unknown digest\n");
+                goto err;
+            }
+
+            key = X509_get0_pubkey_bitstr(x);
+            if (!key) {
+                BIO_puts(bio_err, "No public key??\n");
+                goto end;
+            }
+            digres = EVP_Digest(key->data, key->length, md, &n, fdig, NULL);
+            EVP_MD_free(fdig);
+            if (!digres) {
+                BIO_printf(bio_err, "Out of memory\n");
+                goto err;
+            }
+            BIO_printf(out, "Subject Key Info (%s)=",
+                OBJ_nid2sn(EVP_MD_type(fdig)));
+            for (j=0; j < (int) n; j++) {
+                BIO_printf(out, "%02X%c", md[j],
+                    (j+1 == (int) n)?'\n':':');
+            }
         }
     }
 
