@@ -91,6 +91,7 @@ typedef enum OPTION_choice {
     OPT_COPY_EXTENSIONS, OPT_EXTENSIONS, OPT_REQEXTS, OPT_ADDEXT,
     OPT_PRECERT, OPT_MD,
     OPT_SECTION, OPT_QUIET,
+    OPT_FINGERPRINT, OPT_PRINT_SKI,
     OPT_R_ENUM, OPT_PROV_ENUM
 } OPTION_CHOICE;
 
@@ -164,6 +165,8 @@ const OPTIONS req_options[] = {
     {"noout", OPT_NOOUT, '-', "Do not output REQ"},
     {"newhdr", OPT_NEWHDR, '-', "Output \"NEW\" in the header lines"},
     {"modulus", OPT_MODULUS, '-', "RSA modulus"},
+    {"fingerprint", OPT_FINGERPRINT, '-', "Output fingerprint of the request"},
+    {"print_ski", OPT_PRINT_SKI, '-', "Output the Subject Key Info hash"},
 
     OPT_R_OPTIONS,
     OPT_PROV_OPTIONS,
@@ -264,6 +267,7 @@ int req_main(int argc, char **argv)
     int informat = FORMAT_UNDEF, outformat = FORMAT_PEM, keyform = FORMAT_UNDEF;
     int modulus = 0, multirdn = 1, verify = 0, noout = 0, text = 0;
     int noenc = 0, newhdr = 0, subject = 0, pubkey = 0, precert = 0, x509v1 = 0;
+    int fingerprint = 0, print_ski = 0;
     long newkey_len = -1;
     unsigned long chtype = MBSTRING_ASC, reqflag = 0;
 
@@ -377,6 +381,12 @@ int req_main(int argc, char **argv)
             break;
         case OPT_MODULUS:
             modulus = 1;
+            break;
+        case OPT_FINGERPRINT:
+            fingerprint = 1;
+            break;
+        case OPT_PRINT_SKI:
+            print_ski = 1;
             break;
         case OPT_VERIFY:
             verify = 1;
@@ -990,6 +1000,73 @@ int req_main(int argc, char **argv)
             BIO_puts(out, "Wrong Algorithm type");
         }
         BIO_puts(out, "\n");
+    }
+
+    if (fingerprint) {
+        int j;
+        unsigned int n;
+        unsigned char md[EVP_MAX_MD_SIZE];
+        const EVP_MD *fdig = EVP_get_digestbyname(digest);
+
+        if (!req) {
+            BIO_puts(bio_err, "Must provide PKCS#10 Certificate Request.\n");
+            goto end;
+        }
+
+        if (!fdig)
+            fdig = EVP_sha1();
+
+        if (!X509_REQ_digest(req, fdig, md, &n)) {
+            BIO_puts(bio_err, "Out of memory.\n");
+            goto end;
+        }
+
+        BIO_printf(out,"%s Fingerprint=",
+            OBJ_nid2sn(EVP_MD_type(fdig)));
+        for (j=0; j < (int) n; j++) {
+            BIO_printf(out, "%02X%c", md[j],
+                (j+1 == (int) n)?'\n':':');
+        }
+    }
+
+    if (print_ski) {
+        int j;
+        unsigned int n;
+        unsigned char md[EVP_MAX_MD_SIZE];
+        const EVP_MD *fdig = EVP_get_digestbyname(digest);
+        X509_PUBKEY *xpk = NULL;
+        const unsigned char *pk = NULL;
+        int pklen = 0;
+
+        if (!fdig)
+            fdig = EVP_sha1();
+
+        if (!req) {
+            BIO_puts(bio_err, "Must provide PKCS#10 Certificate Request.\n");
+            goto end;
+        }
+
+        xpk = X509_REQ_get_X509_PUBKEY(req);
+        if (xpk)
+            X509_PUBKEY_get0_param(NULL, &pk, &pklen, NULL, xpk);
+
+        if (!pk || !pklen) {
+            BIO_puts(bio_err, "No public key??\n");
+            goto end;
+        }
+
+        if (!EVP_Digest(pk, pklen, md, &n, fdig, NULL)) {
+            BIO_puts(bio_err, "Failed to get Subject Key digest of request.\n");
+            goto end;
+        }
+
+        BIO_printf(out, "Subject Key Info (%s)=",
+            OBJ_nid2sn(EVP_MD_type(fdig)));
+
+        for (j=0; j < (int) n; j++) {
+            BIO_printf(out, "%02X%c", md[j],
+                (j+1 == (int) n)?'\n':':');
+        }
     }
 
     if (!noout && !gen_x509) {
